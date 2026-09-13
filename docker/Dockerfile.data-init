@@ -1,0 +1,18 @@
+# Servicio data-init — Fase P5, bloque 8.
+# Puebla y verifica el volumen de data/processed antes de que arranque la API.
+# Contexto de build: raíz del repo.  docker build -f docker/Dockerfile.data-init .
+#
+# Solo stdlib: imagen = python:3.14-slim + dos ficheros.
+
+FROM python:3.14-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    ARTIFACTS_MANIFEST=/opt/tfm/artifacts.manifest.json \
+    ARTIFACTS_DIR=/artefactos \
+    ARTIFACTS_BUNDLE=/bundle/artifacts.tar.gz
+
+WORKDIR /opt/tfm
+COPY docker/data_init.py /opt/tfm/data_init.py
+COPY artifacts.manifest.json /opt/tfm/artifacts.manifest.json
+
+ENTRYPOINT ["python", "/opt/tfm/data_init.py"]

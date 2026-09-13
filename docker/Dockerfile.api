@@ -1,0 +1,85 @@
+# API Flask de rutas — Fase P5, bloque 8 (empaquetado).
+# Contexto de build: raíz del repo.  docker build -f docker/Dockerfile.api .
+#
+# Multi-stage: el venv se construye aparte y se copia, así la imagen final no
+# arrastra pip ni cachés de build.
+
+# ─────────────── builder ───────────────
+FROM python:3.14-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements-runtime.txt /tmp/requirements-runtime.txt
+COPY docker/probe_build.py /tmp/probe_build.py
+# xgboost 3.x declara nvidia-nccl-cu13 (~252 MB de wheel) como dependencia
+# dura, inútil en inferencia CPU. Se instala TODO menos xgboost, y luego
+# xgboost con --no-deps: así ni siquiera se descarga nccl. Sus dependencias
+# reales de runtime (numpy, scipy) ya están puestas por la línea anterior.
+RUN grep -v '^xgboost==' /tmp/requirements-runtime.txt > /tmp/req-sin-xgb.txt \
+ && pip install -r /tmp/req-sin-xgb.txt \
+ && pip install --no-deps xgboost==3.4.1 \
+ # comprobación en tiempo de build: xgboost entrena y predice en CPU SIN nccl,
+ # y joblib recarga un modelo serializado igual que el .pkl real.
+ && python /tmp/probe_build.py
+
+# ─────────────── runtime ───────────────
+FROM python:3.14-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    PORT=8080
+
+# tini: reaping de procesos.  curl: healthcheck del compose.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /app
+# Código estrictamente necesario para servir. data/processed llega por
+# volumen (servicio data-init), NO se hornea aquí.
+COPY app/ app/
+COPY routing/ routing/
+COPY ml/ ml/
+COPY pipeline/ pipeline/
+
+RUN useradd --system --uid 10001 --home-dir /app tfm \
+ && mkdir -p /app/data/processed /app/cache \
+ && chown -R tfm:tfm /app
+USER tfm
+
+# Identidad de la build para GET /version (bloque 8B). El Makefile las pasa
+# con --build-arg (git rev-parse --short=12, fecha UTC, sha256 del
+# manifiesto). Sin ellas -> /version responde "desconocido", sin romper
+# nada. Al final del Dockerfile a propósito: cambiar el SHA no invalida
+# ninguna capa cara de pip.
+ARG GIT_SHA=desconocido
+ARG BUILD_DATE=desconocido
+ARG MANIFEST_SHA256=desconocido
+ENV GIT_SHA=$GIT_SHA \
+    BUILD_DATE=$BUILD_DATE \
+    MANIFEST_SHA256=$MANIFEST_SHA256
+
+EXPOSE 8080
+
+# gunicorn --preload + 1 worker: app/wsgi.py carga el grafo UNA vez en el
+# máster (~25 s medidos) y el worker lo hereda por fork. El start_period del
+# healthcheck en docker-compose.yml cubre esa carga.
+#
+# Sin --access-logfile (bloque 8B): la app ya emite una línea JSON por
+# petición (`evento=peticion`, con request_id y duracion_ms) desde
+# after_request; el access log de texto de gunicorn sería una segunda línea
+# duplicada y sin estructura. Se conserva --error-logfile para los pocos
+# mensajes de arranque/caída del propio gunicorn (texto, no JSON).
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["gunicorn", "--preload", "-w", "1", "-b", "0.0.0.0:8080", \
+     "--timeout", "180", "--graceful-timeout", "30", \
+     "--error-logfile", "-", \
+     "app.wsgi:app"]

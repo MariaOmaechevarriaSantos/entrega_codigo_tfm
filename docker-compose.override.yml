@@ -1,0 +1,47 @@
+# Override de DESARROLLO — Fase P5, bloque 8.
+#
+# docker compose lo aplica SOLO automáticamente (no hay que nombrarlo). Así la
+# iteración diaria usa exactamente los mismos servicios, red y healthchecks
+# que verá el tribunal, cambiando únicamente:
+#   - el código va por bind-mount (editar + `docker compose restart api`, sin rebuild)
+#   - data/processed sale del checkout local (artefactos completos), no del volumen
+#   - data-init no hace nada (no hay volumen que poblar)
+#   - la API corre el servidor de desarrollo de Flask (tracebacks), no gunicorn
+#
+# Para levantar EXACTAMENTE como el tribunal (ignorando este override):
+#   docker compose -f docker-compose.yml up --build
+
+services:
+
+  data-init:
+    entrypoint: ["python", "-c", "print('[data-init] dev: data/processed por bind-mount, nada que poblar')"]
+    volumes: !reset []
+
+  api:
+    command: ["python", "app/server.py", "--dev"]
+    environment:
+      PORT: 8080
+      FLASK_ENV: development
+      DUCKDB_PATH: /app/data/processed/tfm_madrid.duckdb
+    volumes:
+      - ./app:/app/app
+      - ./routing:/app/routing
+      - ./ml:/app/ml
+      - ./pipeline:/app/pipeline
+      # Artefactos reales del checkout (la DuckDB completa, el callejero de hoy…).
+      - ./data/processed:/app/data/processed
+      - ./cache:/app/cache
+
+  dashboard:
+    command:
+      - streamlit
+      - run
+      - app/streamlit_app.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+      - --server.runOnSave=true
+    volumes:
+      - ./app:/app/app
+      - ./.streamlit:/app/.streamlit

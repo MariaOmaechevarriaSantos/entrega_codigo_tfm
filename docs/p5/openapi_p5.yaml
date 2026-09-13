@@ -1,0 +1,846 @@
+openapi: 3.0.3
+info:
+  title: TFM — API Rutas Emergencia Bomberos Madrid
+  version: "0.5.0-contrato"
+  description: >
+    Contrato de la capa de integración P5, escrito ANTES de tocar
+    app/server.py (invariantes de la fase en
+    docs/p5/README_P5_API_Streamlit.md, sección 1).
+
+    Ningún endpoint reimplementa lógica de P1-P4:
+      - /ruta e /isocronas llaman a routing/optimizer.py::calcular_ruta y
+        routing/isochrones.py::calcular_isocronas respectivamente. No
+        reimplementan Dijkstra/A* ni el filtrado físico.
+      - El tráfico (en /ruta, /isocronas y /prediccion_trafico) viene
+        siempre de ml/predict_trafico_real.py::predecir_trafico_real.
+        ml/predict.py (modelo sintético) no se usa desde ningún endpoint.
+      - /meteorologia envuelve pipeline/ingest/meteorologia_madrid.py::
+        fetch_meteorologia_actual (feed municipal en vivo de P1). Es
+        puramente informativo: no participa en ningún cálculo de ruta.
+      - Streamlit consume esta API exclusivamente por HTTP — no carga
+        grafos, modelos ni GeoJSON de disco.
+
+    Regla transversal: toda respuesta 200 que dependa de parámetros con
+    valor por defecto (vehículo, algoritmo, fecha/hora, fuente de
+    meteorología...) devuelve un bloque `parametros_efectivos` con los
+    valores REALMENTE usados, nunca solo los que el cliente pidió. Es lo
+    que permite verificar desde fuera del código que un parámetro (p. ej.
+    el selector de vehículo de Streamlit) llegó de verdad hasta la función
+    de negocio, en vez de haberse perdido por el camino como ocurría antes
+    de P5.
+
+    Regla transversal de errores: si un endpoint depende de un artefacto
+    en disco que no existe (grafo, modelo, GeoJSON de equipamientos), la
+    respuesta es un error explícito con el nombre del fichero que falta
+    (code=MISSING_ARTIFACT), nunca un 500 genérico ni datos de relleno.
+
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: Sistema
+  - name: Configuración
+  - name: Datos
+  - name: Rutas
+  - name: IA
+  - name: Meteorología
+
+# ─────────────────────────────────────────────────────────────────
+# COMPONENTES REUTILIZABLES
+# ─────────────────────────────────────────────────────────────────
+components:
+  parameters:
+    date:
+      name: date
+      in: query
+      required: false
+      schema: { type: string, format: date, example: "2026-08-26" }
+      description: >
+        Fecha para consultar tráfico predicho. Si se omite, el endpoint
+        no aplica tráfico (trafico_por_zona quedará como `{}` en la
+        respuesta, no como un error).
+    hora:
+      name: hora
+      in: query
+      required: false
+      schema: { type: integer, minimum: 0, maximum: 23 }
+      description: Si se omite, se usa la hora actual del servidor (documentada en parametros_efectivos.hora).
+    ancho_req:
+      name: ancho_req
+      in: query
+      required: false
+      schema: { type: number, format: float, minimum: 0 }
+      description: >
+        Anchura mínima requerida (m). Si se omite pero se pasa `vehiculo`,
+        se resuelve desde /config. Si se omiten ambos, se usa el
+        vehículo por defecto de /config. Un valor explícito aquí gana
+        siempre sobre `vehiculo`.
+    galibo_req:
+      name: galibo_req
+      in: query
+      required: false
+      schema: { type: number, format: float, minimum: 0 }
+      description: Igual criterio de precedencia que ancho_req.
+    vehiculo:
+      name: vehiculo
+      in: query
+      required: false
+      schema: { type: string }
+      description: Id de un vehículo de /config (p. ej. `autobomba_pesada`). Ver precedencia en ancho_req/galibo_req.
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+          description: Mensaje legible. Si code=MISSING_ARTIFACT, SIEMPRE incluye la ruta del fichero ausente en el propio texto además de en `fichero`.
+        code:
+          type: string
+          enum:
+            - VALIDATION_ERROR         # parámetros de la petición inválidos/ambiguos/incompletos
+            - NOT_FOUND                # identidad referenciada (equipamiento, nombre de parque) no existe
+            - NO_ROUTE                 # nodo de origen/destino no existe en el grafo servido
+            - MISSING_ARTIFACT         # falta un fichero local requerido (grafo, modelo, geojson...)
+            - INTERNAL_ERROR           # fallo no previsto en un endpoint (@app.errorhandler(Exception), bloque 8)
+            - DIRECCION_NO_ENCONTRADA  # /geocodificar: sin resultados o fuera de Madrid (bloque 7)
+            - GEOCODER_UNAVAILABLE     # /geocodificar: Nominatim caído o respuesta no interpretable (bloque 7)
+        fichero:
+          type: string
+          description: Ruta relativa del artefacto ausente. Presente solo si code=MISSING_ARTIFACT.
+      example:
+        error: "Modelo no encontrado en data/processed/modelo_trafico_xgboost.pkl. Ejecuta notebooks/05_modelo_xgboost_densidad_trafico.ipynb."
+        code: MISSING_ARTIFACT
+        fichero: data/processed/modelo_trafico_xgboost.pkl
+
+    VehiculoTipo:
+      type: object
+      required: [id, nombre, ancho_req_m, galibo_req_m]
+      properties:
+        id: { type: string, example: autobomba_pesada }
+        nombre: { type: string, example: "Autobomba pesada (3.5m)" }
+        ancho_req_m: { type: number, example: 3.5 }
+        galibo_req_m: { type: number, example: 4.0 }
+
+    NodoResuelto:
+      type: object
+      required: [node_id, tipo_nodo, nombre]
+      description: >
+        tipo_nodo/nombre son `null` salvo que el origen/destino se haya
+        resuelto explícitamente a un nodo especial (ver /ruta, modo de
+        identidad). Un origen/destino dado por lat/lon NUNCA resuelve a
+        un nodo especial — routing/graph_engine.py construye el KDTree
+        solo con nodos de calle antes de añadir los especiales, así que
+        get_nearest_node() no puede devolver uno.
+      properties:
+        node_id:
+          oneOf: [{ type: integer }, { type: string }]
+        tipo_nodo:
+          type: string
+          nullable: true
+          enum: [bomberos, hospitales, null]
+        nombre:
+          type: string
+          nullable: true
+
+    ParametrosEfectivosRuta:
+      type: object
+      required: [ancho_req, galibo_req, algoritmo, fecha, hora, vehiculo]
+      properties:
+        ancho_req: { type: number, example: 3.5 }
+        galibo_req: { type: number, example: 4.0 }
+        algoritmo: { type: string, enum: [dijkstra, astar] }
+        fecha:
+          type: string
+          format: date
+          nullable: true
+          description: "null si la petición no incluía `date` (no se aplicó tráfico)."
+        hora: { type: integer, minimum: 0, maximum: 23 }
+        vehiculo:
+          type: string
+          description: >
+            Id de /config si ancho_req/galibo_req coinciden exactamente
+            con un vehículo del catálogo; "personalizado" en caso
+            contrario (p. ej. si el cliente pasó ancho_req a mano).
+
+    TraficoPorZona:
+      type: object
+      description: "{zona: nivel} REALMENTE usado en el cálculo (0=Bajo,1=Medio,2=Alto). `{}` si no se pidió tráfico — no es un error."
+      additionalProperties:
+        type: integer
+        enum: [0, 1, 2]
+      example: { Centro: 2, Retiro: 1, Arganzuela: 0 }
+
+    HealthStatus:
+      type: object
+      description: >
+        Diagnóstico del servicio. La MISMA forma en 200 y en 503: en 503
+        NO se devuelve un ErrorResponse — el cliente (dashboard "Sistema")
+        necesita el diagnóstico completo también cuando el servicio está
+        degradado. `status` distingue el caso: "ok" (200, grafo cargado,
+        sirve rutas) / "degraded" (503, grafo no cargado).
+      required: [status, grafo, modelo_trafico, duckdb, artefactos_faltantes, timestamp]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        grafo:
+          type: object
+          required: [cargado, nodes, edges, nodos_especiales, segundos_carga, error]
+          properties:
+            cargado: { type: boolean }
+            nodes: { type: integer, nullable: true }
+            edges: { type: integer, nullable: true }
+            nodos_especiales:
+              type: object
+              additionalProperties: { type: integer }
+              example: { bomberos: 13, hospitales: 53 }
+            segundos_carga:
+              type: number
+              nullable: true
+              description: Tiempo real medido de routing.graph_engine.load_graph() al arrancar. null si nunca llegó a cargar.
+            error:
+              type: string
+              nullable: true
+              description: >
+                Mensaje del fallo de carga si el grafo no está cargado
+                (nombra el fichero si el fallo lo nombraba). null si
+                cargado=true.
+        modelo_trafico:
+          type: object
+          required: [cargado, ruta_pkl]
+          properties:
+            cargado:
+              type: boolean
+              description: Refleja si ml/predict_trafico_real.py ya cargó el modelo en memoria (por una petición previa) — /health no lo fuerza a cargar.
+            ruta_pkl: { type: string }
+        duckdb:
+          type: object
+          required: [accesible, ruta]
+          properties:
+            accesible:
+              type: boolean
+              description: Resultado de un connect() + `SELECT 1` real, no solo comprobar que el fichero existe (medido ~11ms, ver README_P5_API_Streamlit.md bloque 2).
+            ruta: { type: string }
+        artefactos_faltantes:
+          type: array
+          items: { type: string }
+          description: Rutas relativas de los ficheros esperados que no existen. Lista plana, no un dict de booleanos.
+        timestamp: { type: string, format: date-time, description: ISO-8601 con zona horaria (UTC). }
+
+  responses:
+    ValidationError:
+      description: Parámetros inválidos, incompletos o ambiguos.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    MissingArtifact:
+      description: Falta un artefacto local requerido para responder.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+# ─────────────────────────────────────────────────────────────────
+# ENDPOINTS
+# ─────────────────────────────────────────────────────────────────
+paths:
+
+  /health:
+    get:
+      tags: [Sistema]
+      summary: Estado del servicio y del grafo cargado.
+      description: >
+        No falla solo porque falten los GeoJSON de equipamientos (P1) —
+        eso se refleja como nodos_especiales en 0, no como error, porque
+        el grafo SÍ es servible sin ellos (routing/graph_engine.py ya lo
+        contempla). Solo devuelve 503 si el propio callejero no existe,
+        porque entonces no hay grafo que servir en absoluto.
+      responses:
+        '200':
+          description: >
+            Servicio operativo (puede servir rutas — el grafo está
+            cargado). Puede llevar artefactos_faltantes no vacío si
+            faltan artefactos opcionales (equipamientos, modelo): eso no
+            baja el status a 503, solo se lista.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+        '503':
+          description: >
+            El grafo no está cargado (callejero ausente, corrupto, o
+            cualquier otro fallo de carga) — no se pueden servir rutas. El
+            cuerpo es el MISMO HealthStatus que el 200 (no un ErrorResponse):
+            `status: "degraded"`, `grafo.cargado: false`, `grafo.error` con
+            el mensaje del fallo. El dashboard lo usa para mostrar el
+            diagnóstico aunque el servicio esté caído.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthStatus' }
+              example:
+                status: degraded
+                grafo:
+                  cargado: false
+                  nodes: null
+                  edges: null
+                  nodos_especiales: {}
+                  segundos_carga: null
+                  error: "Callejero no encontrado en data/processed/madrid_callejero_filtered.geojson. Ejecuta: python pipeline/run_pipeline.py"
+                modelo_trafico: { cargado: false, ruta_pkl: data/processed/modelo_trafico_xgboost.pkl }
+                duckdb: { accesible: false, ruta: data/processed/tfm_madrid.duckdb }
+                artefactos_faltantes: [data/processed/madrid_callejero_filtered.geojson]
+                timestamp: "2026-08-30T11:24:24.389191+00:00"
+
+  /version:
+    get:
+      tags: [Sistema]
+      summary: Identidad de la build en ejecución (bloque 8B).
+      description: >
+        Versión del contrato de la API, SHA de git (recortado a 12
+        caracteres por el Makefile, no el completo), fecha de build UTC y
+        sha256 del `artifacts.manifest.json` con el que se empaquetaron los
+        datos. Los tres últimos entran como build args del `Dockerfile.api`;
+        si la imagen se construyó sin pasarlos valen `"desconocido"`. No
+        expone rutas de fichero ni versiones de dependencias a propósito.
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version_api, git_sha, fecha_build, sha256_manifiesto_datos]
+                properties:
+                  version_api: { type: string, example: "1.0.0" }
+                  git_sha: { type: string, example: "1a2b3c4d5e6f", description: "SHA corto, o 'desconocido'." }
+                  fecha_build: { type: string, example: "2026-08-30T10:00:00Z", description: "ISO-8601 UTC, o 'desconocido'." }
+                  sha256_manifiesto_datos: { type: string, example: "02b605bac4e1...", description: "sha256 de artifacts.manifest.json, o 'desconocido'." }
+
+  /metrics:
+    get:
+      tags: [Sistema]
+      summary: Métricas en formato Prometheus (bloque 8B).
+      description: >
+        Exposición Prometheus en texto: `tfm_http_requests_total` y
+        `tfm_http_request_duration_seconds` por método y endpoint (regla de
+        ruta), `tfm_cache_events_total{cache,resultado}` (tráfico y meteo,
+        hit/miss) y `tfm_isocronas_origen_total{origen}`. No hay ningún
+        Prometheus desplegado; el endpoint se lee con `curl` o se le apunta
+        un scraper externo. `/metrics` no se cuenta a sí mismo.
+      responses:
+        '200':
+          description: Exposición Prometheus.
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /config:
+    get:
+      tags: [Configuración]
+      summary: Catálogo compartido (vehículos, algoritmos, defaults) — fuente única para la API y Streamlit.
+      description: >
+        Streamlit consume este endpoint en vez de tener su propio
+        ancho_map hardcodeado, para no duplicar constantes (regla
+        "Prohibido duplicar constantes entre Streamlit y la API",
+        docs/adr/0006-catalogo-unico-de-vehiculos.md).
+      responses:
+        '200':
+          description: OK.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [vehiculos, vehiculo_default, algoritmos_disponibles, algoritmo_default, cortes_isocronas_min_default, trafico_niveles]
+                properties:
+                  vehiculos:
+                    type: array
+                    items: { $ref: '#/components/schemas/VehiculoTipo' }
+                  vehiculo_default: { type: string, example: autobomba_pesada }
+                  algoritmos_disponibles:
+                    type: array
+                    items: { type: string, enum: [dijkstra, astar] }
+                  algoritmo_default: { type: string, example: dijkstra }
+                  cortes_isocronas_min_default:
+                    type: array
+                    items: { type: integer }
+                    example: [5, 10, 15]
+                  trafico_niveles:
+                    type: object
+                    example: { "0": "Bajo", "1": "Medio", "2": "Alto" }
+
+  /equipamientos:
+    get:
+      tags: [Datos]
+      summary: Instalaciones críticas de Madrid en GeoJSON.
+      parameters:
+        - name: tipo
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [bomberos, hospitales, centros_educativos, centros_mayores]
+            default: bomberos
+      responses:
+        '200':
+          description: >
+            GeoJSON FeatureCollection. Incluye `tipo` a nivel superior
+            (fuera del spec de GeoJSON pero tolerado) como parámetro
+            efectivo resuelto, igual que el resto de endpoints.
+          content:
+            application/geo+json:
+              schema:
+                type: object
+                required: [type, features, tipo]
+                properties:
+                  type: { type: string, enum: [FeatureCollection] }
+                  features: { type: array, items: { type: object } }
+                  tipo: { type: string }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404':
+          description: >
+            `tipo` es válido pero su GeoJSON no existe todavía en
+            data/processed/ — el caso real hoy para los 4 tipos, hasta
+            que se corrija el hueco de P1 (ver conversación anterior).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: "Equipamiento 'bomberos' no disponible: data/processed/parques_bomberos.geojson no existe."
+                code: MISSING_ARTIFACT
+                fichero: data/processed/parques_bomberos.geojson
+
+  /ruta:
+    get:
+      tags: [Rutas]
+      summary: Ruta óptima para un vehículo de emergencia entre origen y destino.
+      description: |
+        Llama a routing/optimizer.py::calcular_ruta — no reimplementa
+        Dijkstra/A* ni el filtrado físico.
+
+        **Origen y destino admiten DOS modos, mutuamente excluyentes:**
+          1. Por coordenadas: `orig_lat`+`orig_lon` (resuelve con
+             get_nearest_node — NUNCA puede caer en un nodo especial).
+          2. Por identidad: `orig_tipo_nodo`+`orig_nombre` (resuelve con
+             get_special_node — para arrancar la ruta desde el nodo real
+             de un parque, no desde una coordenada aproximada). Mismo
+             patrón para destino con `dest_tipo_nodo`+`dest_nombre`
+             (p. ej. destino = hospital real por nombre).
+
+        Es el único modo en que `origen`/`destino` en la respuesta pueden
+        llevar tipo_nodo/nombre no nulos.
+
+        **Precedencia de vehículo:** ancho_req/galibo_req explícitos >
+        `vehiculo` (catálogo de /config) > vehículo por defecto de
+        /config. `parametros_efectivos.vehiculo` en la respuesta
+        documenta cuál de los tres se usó — es el mecanismo para
+        verificar desde fuera que el selector de vehículo de Streamlit
+        llegó hasta calcular_ruta.
+      parameters:
+        - name: orig_lat
+          in: query
+          schema: { type: number }
+        - name: orig_lon
+          in: query
+          schema: { type: number }
+        - name: orig_tipo_nodo
+          in: query
+          schema: { type: string, enum: [bomberos, hospitales] }
+        - name: orig_nombre
+          in: query
+          schema: { type: string }
+        - name: dest_lat
+          in: query
+          schema: { type: number }
+        - name: dest_lon
+          in: query
+          schema: { type: number }
+        - name: dest_tipo_nodo
+          in: query
+          schema: { type: string, enum: [bomberos, hospitales] }
+        - name: dest_nombre
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/date'
+        - $ref: '#/components/parameters/hora'
+        - $ref: '#/components/parameters/ancho_req'
+        - $ref: '#/components/parameters/galibo_req'
+        - $ref: '#/components/parameters/vehiculo'
+        - name: algoritmo
+          in: query
+          schema: { type: string, enum: [dijkstra, astar], default: dijkstra }
+      responses:
+        '200':
+          description: >
+            Ruta calculada — completa o parcial. Una ruta parcial
+            (ruta_completa=false) es una respuesta válida, no un error:
+            documenta hasta dónde puede llegar el vehículo.
+          content:
+            application/geo+json:
+              schema:
+                type: object
+                required: [type, features, parametros_efectivos, trafico_por_zona, origen, destino, zona_destino]
+                properties:
+                  type: { type: string, enum: [FeatureCollection] }
+                  features:
+                    type: array
+                    minItems: 1
+                    maxItems: 1
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string, enum: [Feature] }
+                        geometry:
+                          type: object
+                          description: LineString en EPSG:4326.
+                        properties:
+                          type: object
+                          required: [distancia_m, tiempo_min, ruta_completa]
+                          properties:
+                            distancia_m: { type: number }
+                            tiempo_min: { type: number }
+                            ruta_completa: { type: boolean }
+                            distancia_sin_cubrir_m:
+                              type: number
+                              description: Solo si ruta_completa=false — línea recta desde el punto accesible más próximo hasta el destino real.
+                            motivo:
+                              type: string
+                              description: Solo si ruta_completa=false.
+                              example: "Destino no alcanzable con ancho_req=3.5m y/o galibo_req=4.0m; devuelta ruta parcial hasta el nodo accesible más próximo."
+                  parametros_efectivos: { $ref: '#/components/schemas/ParametrosEfectivosRuta' }
+                  trafico_por_zona: { $ref: '#/components/schemas/TraficoPorZona' }
+                  origen: { $ref: '#/components/schemas/NodoResuelto' }
+                  destino: { $ref: '#/components/schemas/NodoResuelto' }
+                  zona_destino:
+                    type: object
+                    description: >
+                      Distrito del incidente (nodo destino) y su nivel de
+                      tráfico previsto. Campo aditivo (bloque 7): el
+                      dashboard lo muestra como cifra grande del panel de
+                      resultados. `zona` es null si el distrito no se puede
+                      determinar (p. ej. destino resuelto por identidad a un
+                      nodo especial); `nivel_trafico` es null si no se pidió
+                      tráfico (sin `date`) o si `zona` es null — nunca se
+                      rellena con 0 por defecto.
+                    required: [zona, nivel_trafico]
+                    properties:
+                      zona: { type: string, nullable: true, example: "Centro" }
+                      nivel_trafico:
+                        type: integer
+                        nullable: true
+                        enum: [0, 1, 2]
+                        description: 0=Bajo, 1=Medio, 2=Alto.
+        '400':
+          description: >
+            Parámetros inválidos, o ninguno/ambos de los dos modos de
+            origen (o destino) presentes a la vez.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: >
+            `orig_tipo_nodo`+`orig_nombre` (o destino) no resuelve a
+            ningún nodo especial real (code=NOT_FOUND), o el nodo
+            resuelto ya no existe en el grafo servido (code=NO_ROUTE).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: >
+            Se pidió `date` (tráfico) pero el modelo de P3 no está
+            disponible. No se degrada en silencio a ruta sin tráfico —
+            eso ocultaría al usuario que su petición explícita no se
+            cumplió.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example:
+                error: "Modelo no encontrado en data/processed/modelo_trafico_xgboost.pkl."
+                code: MISSING_ARTIFACT
+                fichero: data/processed/modelo_trafico_xgboost.pkl
+
+  /isocronas:
+    get:
+      tags: [Rutas]
+      summary: Polígonos de cobertura (5/10/15 min, /config.cortes_isocronas_min_default) desde un parque de bomberos real.
+      description: |
+        Implementado en el bloque 4 de P5 (ver docs/p5/README_P5_API_Streamlit.md,
+        "Decisiones tomadas" -- forma más simple que la especulada aquí
+        originalmente, decidida con el usuario tras medir en real la
+        alternativa de servir el fichero estático generado por
+        generar_geojson_bomberos(): ~38ms pero fijo al vehículo con el que
+        se generó, frente a ~3.5s en vivo la primera vez por combinación
+        pero siempre coherente con el vehículo/hora reales).
+
+        Llama a routing/isochrones.py::calcular_isocronas para UN parque
+        por petición, resuelto por identidad (mismo mecanismo que el modo
+        identidad de /ruta). Reutiliza _resolver_vehiculo_ancho_galibo
+        (compartida con /ruta, ver app/server.py), así que admite los
+        mismos parámetros de vehículo y precedencia. Cacheado en el
+        servidor por (parque, ancho_req, galibo_req, fecha, hora) -- ver
+        _isocronas_cache en app/server.py.
+
+        Siempre calcula los cortes de /config.cortes_isocronas_min_default
+        (no un array `cortes_min` configurable por petición, que era la
+        forma originalmente especulada); `corte_min` (singular) filtra a
+        UN corte de los ya calculados si se quiere solo uno.
+      parameters:
+        - name: nombre
+          in: query
+          required: true
+          schema: { type: string }
+          description: Nombre exacto del parque de bomberos (tipo_nodo=bomberos fijo, ver /equipamientos?tipo=bomberos).
+        - $ref: '#/components/parameters/date'
+        - $ref: '#/components/parameters/hora'
+        - $ref: '#/components/parameters/ancho_req'
+        - $ref: '#/components/parameters/galibo_req'
+        - $ref: '#/components/parameters/vehiculo'
+        - name: corte_min
+          in: query
+          required: false
+          schema: { type: number }
+          description: Si se especifica, filtra a un solo corte (uno de /config.cortes_isocronas_min_default); si se omite, devuelve todos.
+      responses:
+        '200':
+          description: Una feature (polígono) por corte temporal.
+          content:
+            application/geo+json:
+              schema:
+                type: object
+                required: [type, features, parque, parametros_efectivos, trafico_por_zona]
+                properties:
+                  type: { type: string, enum: [FeatureCollection] }
+                  features:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string, enum: [Feature] }
+                        geometry: { type: object }
+                        properties:
+                          type: object
+                          properties:
+                            corte_min: { type: number }
+                  parque: { $ref: '#/components/schemas/NodoResuelto' }
+                  parametros_efectivos:
+                    allOf:
+                      - $ref: '#/components/schemas/ParametrosEfectivosRuta'
+                      - description: Mismo esquema que /ruta, sin `algoritmo` (isócronas siempre usa Dijkstra single-source).
+                  trafico_por_zona: { $ref: '#/components/schemas/TraficoPorZona' }
+        '400':
+          description: Falta `nombre`, vehículo inexistente, fecha/hora inválidas, o `corte_min` no soportado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: "`nombre` no resuelve a ningún parque de bomberos real, o el nodo resuelto ya no está en el grafo servido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: Falta el grafo, o falta el modelo de tráfico si se pidió `date`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /prediccion_trafico:
+    get:
+      tags: [IA]
+      summary: Nivel de tráfico predicho por distrito.
+      description: Llama a ml/predict_trafico_real.py::predecir_trafico_real. Nunca ml/predict.py.
+      parameters:
+        - name: date
+          in: query
+          required: true
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/hora'
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [parametros_efectivos, trafico_por_zona]
+                properties:
+                  parametros_efectivos:
+                    type: object
+                    properties:
+                      fecha: { type: string, format: date }
+                      hora: { type: integer }
+                      zonas: { type: array, items: { type: string } }
+                  trafico_por_zona: { $ref: '#/components/schemas/TraficoPorZona' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/MissingArtifact' }
+
+  /geocodificar:
+    get:
+      tags: [Datos]
+      summary: Traduce una dirección de Madrid a coordenadas (conveniencia del dashboard).
+      description: >
+        Envuelve Nominatim (OpenStreetMap), sesgado a España y filtrado al
+        bounding box de Madrid (cfg.MADRID_BBOX). Es solo para que el usuario
+        escriba una calle en vez de teclear lat/lon; `/ruta` sigue trabajando
+        con coordenadas y NO llama a este endpoint. No toca el grafo.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+          example: "Calle de Alcalá 100"
+      responses:
+        '200':
+          description: Primer resultado dentro de Madrid.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lat, lon, direccion]
+                properties:
+                  lat: { type: number }
+                  lon: { type: number }
+                  direccion: { type: string, description: "display_name de Nominatim." }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404':
+          description: Sin resultados, o el resultado cae fuera de Madrid.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { error: "No se ha encontrado ninguna dirección para 'x' en Madrid.", code: DIRECCION_NO_ENCONTRADA }
+        '503':
+          description: El geocodificador externo (Nominatim) no está disponible.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { error: "El buscador de direcciones no está disponible ahora mismo. Introduce las coordenadas del destino a mano.", code: GEOCODER_UNAVAILABLE }
+
+  /meteorologia:
+    get:
+      tags: [Meteorología]
+      summary: Lectura meteorológica actual por distrito y alerta INFORMATIVA.
+      description: >
+        Envuelve pipeline/ingest/meteorologia_madrid.py::fetch_meteorologia_actual
+        (feed municipal en vivo de P1, 26 estaciones, sin API key). No
+        participa en el cálculo de ninguna ruta — /ruta no lee este
+        endpoint ni depende de él, y el modelo de tráfico de P3 excluye la
+        meteorología a propósito. La respuesta lo declara explícitamente
+        (`informativo: true` + `aviso` + `alerta.nota_informativa`).
+
+        **Caché (bloque 6 de P5).** TTL en memoria de 15 min y último
+        snapshot bueno persistido en `cache/meteorologia_snapshot.json`.
+        Si el feed en vivo no responde (o responde vacío), se sirve el
+        snapshot con `origen: "cache"` y su antigüedad en `edad_min` — la
+        demo no puede depender de la red. `origen: "live"` cuando el dato
+        viene del feed (esta petición o dentro del TTL).
+
+        **Alerta.** Bloque `alerta` con `nivel` (normal / precaucion /
+        adversa), calculado por app/meteo_alerta.py (módulo único de
+        umbrales, anclados al Plan Meteoalerta de AEMET para Madrid), como
+        el PEOR caso entre todas las estaciones que reportan. `criterio`
+        nombra la magnitud, la estación y el valor que lo disparó.
+
+        **AEMET.** Fuente opcional NO implementada (no hay adaptador en el
+        repo). Pedir `?fuente=aemet` — con o sin `AEMET_API_KEY` — no es un
+        error: se sirve el feed municipal igualmente (HTTP 200,
+        `parametros_efectivos.fuente = "municipal"`) y se añaden
+        `aemet_disponible: false` + `motivo`. Este endpoint nunca devuelve
+        5xx: un panel informativo no debe poder tumbar la petición de
+        quien lo consulta.
+      parameters:
+        - name: zona
+          in: query
+          required: false
+          schema: { type: string }
+          description: >
+            Filtra a un único distrito (nomenclatura de
+            ml.generate_dataset.DISTRITOS_MADRID). Sin este parámetro,
+            devuelve los 21. Cada distrito toma las magnitudes de la
+            estación municipal más cercana a su centroide (con 26
+            estaciones para 21 distritos, varios distritos comparten
+            estación — nivel "cordura", no límite administrativo).
+        - name: fuente
+          in: query
+          required: false
+          schema: { type: string, enum: [municipal, aemet], default: municipal }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [informativo, aviso, disponible, origen, edad_min, alerta, parametros_efectivos, meteorologia_por_zona]
+                properties:
+                  informativo: { type: boolean, enum: [true] }
+                  aviso:
+                    type: string
+                    example: "Alerta meramente informativa: no modifica el cálculo de la ruta. El modelo de tráfico de P3 excluye la meteorología a propósito."
+                  disponible:
+                    type: boolean
+                    description: false solo si el feed en vivo falló Y no hay snapshot previo en disco. En ese caso `meteorologia_por_zona` es `{}`.
+                  origen:
+                    type: string
+                    enum: [live, cache]
+                    description: '"live" = dato del feed municipal (esta petición o dentro del TTL de 15 min). "cache" = feed no disponible, se sirve el snapshot en disco.'
+                  edad_min:
+                    type: integer
+                    nullable: true
+                    description: Antigüedad en minutos del dato servido (0 si recién traído). null si no hay ningún dato (disponible=false).
+                  motivo:
+                    type: string
+                    description: Presente si origen="cache", si disponible=false, o si se pidió ?fuente=aemet. Explica la degradación.
+                    example: "feed en vivo no disponible (...); se sirve el último snapshot guardado hace 18 min"
+                  alerta:
+                    type: object
+                    required: [nivel, criterio, nota_informativa]
+                    properties:
+                      nivel:
+                        type: string
+                        enum: [normal, precaucion, adversa]
+                      criterio:
+                        type: string
+                        example: "viento medio 43.2 km/h en 'Casa de Campo' (≥ 40 km/h)"
+                      nota_informativa:
+                        type: string
+                        description: Declara que la alerta no modifica el cálculo de la ruta.
+                  aemet_disponible:
+                    type: boolean
+                    enum: [false]
+                    description: "Presente solo si se pidió fuente=aemet. Siempre false: el adaptador de AEMET no está implementado."
+                  parametros_efectivos:
+                    type: object
+                    required: [fuente, zona, timestamp_lectura]
+                    properties:
+                      fuente:
+                        type: string
+                        enum: [municipal]
+                        description: "Siempre municipal en este despliegue."
+                      zona:
+                        type: string
+                        nullable: true
+                        description: "El distrito pedido en el parámetro zona, o null."
+                      timestamp_lectura:
+                        type: string
+                        format: date-time
+                        nullable: true
+                  meteorologia_por_zona:
+                    type: object
+                    description: "Mapa distrito -> condiciones para los 21 distritos (o solo el pedido en zona). Vacío si disponible=false. Un distrito puede ser null si ninguna estación tiene coordenadas."
+                    additionalProperties:
+                      type: object
+                      nullable: true
+                      properties:
+                        temperatura:
+                          type: number
+                          nullable: true
+                        humedad_relativa:
+                          type: number
+                          nullable: true
+                        precipitacion_mm:
+                          type: number
+                          nullable: true
+                          description: "Precipitación acumulada en la última hora (mm)."
+                        viento_kmh:
+                          type: number
+                          nullable: true
+                          description: "Viento medio (km/h); el feed lo publica en m/s y la API lo convierte."
+        '400':
+          description: '`zona` o `fuente` no reconocidas (code=VALIDATION_ERROR). Es el único 4xx; el resto de fallos degradan a 200 con disponible/origen.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }

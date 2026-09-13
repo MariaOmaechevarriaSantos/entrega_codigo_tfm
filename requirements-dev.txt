@@ -1,0 +1,14 @@
+# Dependencias de DESARROLLO — Fase P5, bloque 8B.
+#
+# NO van a ninguna imagen (ni runtime ni dashboard). Se instalan sobre el
+# .venv del proyecto:
+#     .venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+#
+# `make lint` necesita ruff; la suite necesita pytest + PyYAML (un test lee
+# docs/openapi_p5.yaml). pytest / PyYAML suelen venir ya por requirements.txt
+# o de forma transitiva; se fijan aquí para que la CI no dependa de eso.
+
+ruff==0.16.5
+pytest==9.1.1
+pytest-cov==7.1.0
+PyYAML==6.0.3

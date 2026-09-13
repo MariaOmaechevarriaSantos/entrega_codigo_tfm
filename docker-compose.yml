@@ -1,0 +1,101 @@
+# Sistema de rutas de emergencia — Fase P5, bloque 8 (empaquetado).
+#
+#   docker compose up --build        # levanta data-init -> api -> dashboard
+#   dashboard:  http://localhost:8501
+#   api:        http://localhost:8080  (Swagger en /apidocs)
+#
+# data-init puebla un VOLUMEN con nombre (processed_data) a partir de
+# artifacts.tar.gz (local en ./dist o descargado de ARTIFACTS_URL), verificado
+# contra artifacts.manifest.json. La API monta ese volumen en /app/data/processed.
+# Los datos NO están en las imágenes: regenerar el callejero o el modelo no
+# obliga a reconstruir nada, solo a repoblar el volumen.
+
+name: tfm-bomberos
+
+services:
+
+  data-init:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.data-init
+    environment:
+      # URL del Release con artifacts.tar.gz. Si se deja vacía, data-init
+      # SOLO puede usar el tarball local ./dist/artifacts.tar.gz.
+      ARTIFACTS_URL: ${ARTIFACTS_URL:-}
+    volumes:
+      - processed_data:/artefactos
+      # Ruta OFFLINE: si existe ./dist/artifacts.tar.gz en el host, se usa
+      # sin tocar la red. Si la carpeta no existe, el montaje es un dir vacío.
+      - ./dist:/bundle:ro
+    restart: "no"
+    mem_limit: 512m
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+      # Identidad de la build para GET /version (bloque 8B). El Makefile
+      # (`make up`) las exporta con git/date/sha256; `docker compose up` a
+      # secas -> "desconocido", sin romper el arranque del tribunal.
+      args:
+        GIT_SHA: ${GIT_SHA:-desconocido}
+        BUILD_DATE: ${BUILD_DATE:-desconocido}
+        MANIFEST_SHA256: ${MANIFEST_SHA256:-desconocido}
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: 8080
+      WORKERS: 1
+      # Nivel de los logs JSON de la API (bloque 8B). DEBUG para depurar.
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # DuckDB en el volumen (get_connection NO abre en read_only -> escribible).
+      DUCKDB_PATH: /app/data/processed/tfm_madrid.duckdb
+    volumes:
+      - processed_data:/app/data/processed:rw
+    ports:
+      - "${API_PORT:-8080}:8080"
+    healthcheck:
+      # /health devuelve 200 solo con el grafo cargado; 503 si no.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Cubre la carga del grafo al arrancar en el contenedor (~53-63 s
+      # medidos aquí; ~25 s en el host) con margen amplio para máquinas
+      # lentas. Durante esta ventana un fallo NO marca unhealthy.
+      start_period: 180s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: ${API_MEM_LIMIT:-2g}
+    mem_reservation: 1g
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dashboard
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      # El dashboard habla con la API por el nombre de servicio en la red interna.
+      API_URL: http://api:8080
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+    stop_grace_period: 15s
+    mem_limit: ${DASHBOARD_MEM_LIMIT:-1g}
+    mem_reservation: 384m
+
+volumes:
+  processed_data:
+
+networks:
+  default:
+    name: tfm-bomberos-net

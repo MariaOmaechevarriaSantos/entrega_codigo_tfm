@@ -1,0 +1,18 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Datos y artefactos generados por el pipeline (se regeneran con `make`)
+data/
+cache/
+
+# Entorno
+.env

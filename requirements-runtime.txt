@@ -1,0 +1,49 @@
+# Dependencias de RUNTIME de la API (app/server.py) — Fase P5, bloque 8.
+#
+# Subconjunto recortado de requirements.txt: SOLO lo que importa el proceso
+# que sirve /ruta, /isocronas, /health, etc. Deliberadamente EXCLUIDO frente
+# a requirements.txt:
+#   osmnx, prefect          -> solo pipeline/run_pipeline.py (ingesta batch)
+#   shap                    -> solo notebooks de P3 (explicabilidad)
+#   schedule, openpyxl      -> solo ingesta
+#   streamlit, folium,
+#   streamlit-folium, pydeck-> imagen del dashboard (requirements-dashboard.txt)
+#   pytest, pytest-cov      -> desarrollo / CI
+#
+# Versiones ancladas a las del .venv con el que se entrenó y serializó
+# data/processed/modelo_trafico_xgboost.pkl (evita el DeprecationWarning de
+# joblib al cargar y cualquier deriva de formato). Verificado: todas resuelven
+# como wheel cp314 en python:3.14-slim salvo flasgger (sdist, Python puro).
+
+# --- API HTTP ---
+Flask==3.1.3
+flasgger==0.9.7.1
+gunicorn==26.2.0
+Werkzeug==3.1.8
+
+# --- Red viaria y geometría ---
+geopandas==1.1.4
+shapely==2.1.2
+pyproj==3.7.2
+pyogrio==0.13.0
+networkx==3.6.1
+scipy==1.18.1
+
+# --- Modelo de tráfico (P3) ---
+xgboost==3.4.1
+scikit-learn==1.9.0
+joblib==1.5.3
+
+# --- Datos ---
+pandas==3.0.5
+numpy==2.5.2
+duckdb==1.5.5
+
+# --- Utilidades ---
+requests==2.34.2
+python-dotenv==1.2.3
+
+# --- Observabilidad (bloque 8B) ---
+# Solo el cliente para exponer GET /metrics en texto Prometheus. Puro
+# Python, sin servicios: no se levanta ningún Prometheus/Grafana.
+prometheus-client==0.26.0

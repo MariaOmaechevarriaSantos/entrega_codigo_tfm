@@ -1,0 +1,31 @@
+# Config de ruff para `make lint` — Fase P5, bloque 8B.
+#
+# Deliberadamente permisiva: el objetivo es cazar imports rotos, nombres
+# sin definir, variables sin usar y errores de sintaxis, NO imponer un
+# estilo sobre el código heredado de P1-P4. Si esto se quisiera endurecer,
+# sería una decisión aparte (y una ADR).
+
+target-version = "py314"
+line-length = 120
+
+extend-exclude = [
+    ".venv",
+    "notebooks",
+    "data",
+    "dist",
+]
+
+[lint]
+# E9 = errores de sintaxis / de parseo.  F = pyflakes: imports sin usar,
+# nombres sin definir, f-strings sin placeholders, redefiniciones.
+# NO se activa el orden de imports (I): sobre el código de P1-P4 solo
+# generaba ruido de estilo, ningún fallo real.
+select = ["E9", "F"]
+ignore = [
+    "F401",  # import sin usar: hay reexports intencionados en __init__.py y en app/
+]
+
+[lint.per-file-ignores]
+# En los tests, pytest "usa" fixtures por nombre de argumento -> ruff los ve
+# como redefinidos / sin usar.
+"tests/*" = ["F811", "F841"]

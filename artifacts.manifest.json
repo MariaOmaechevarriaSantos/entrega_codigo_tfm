@@ -1,0 +1,64 @@
+{
+  "schema": "tfm-bomberos/artefactos-runtime/1",
+  "tarball": {
+    "nombre": "artifacts.tar.gz",
+    "bytes": 5291174,
+    "sha256": "02b605bac4e1937828cb8e105a3e19d89bebe4c50c01dd2e7020e505ec570f2e"
+  },
+  "ficheros": [
+    {
+      "ruta": "madrid_callejero_filtered.geojson",
+      "bytes": 44897501,
+      "sha256": "263449995f4c4c7630ecdd78164d1a6cce230ffa1e0d4c96dddbd1066297bcae",
+      "imprescindible": true
+    },
+    {
+      "ruta": "parques_bomberos.geojson",
+      "bytes": 3243,
+      "sha256": "5a41cfd38e6fce957f904d9614161eb81385f1a1f9734548d71f5cdbc43a9bf2",
+      "imprescindible": true
+    },
+    {
+      "ruta": "hospitales.geojson",
+      "bytes": 68015,
+      "sha256": "4cd61c800e148d1d99287c51b2a1132ba5ba1daab0d45ae2e05f43c44687b033",
+      "imprescindible": true
+    },
+    {
+      "ruta": "modelo_trafico_xgboost.pkl",
+      "bytes": 3240657,
+      "sha256": "c9856a0b7ccbc5108ac187ba86931abb71ce89d8068d3e28ee7b1deba8974a59",
+      "imprescindible": true
+    },
+    {
+      "ruta": "modelo_trafico_xgboost_metadata.json",
+      "bytes": 6781,
+      "sha256": "35cd74bb34e5bf5fd71b72fa0663471a84c5061370325c4c162368466564c6c0",
+      "imprescindible": true
+    },
+    {
+      "ruta": "tfm_madrid.duckdb",
+      "bytes": 798720,
+      "sha256": "006b4a6f9b78a8b8acb0f704d2bcf963a8f160d09d10bd33bc10b681a37a31b1",
+      "imprescindible": true
+    },
+    {
+      "ruta": "isocronas_bomberos.geojson",
+      "bytes": 91498,
+      "sha256": "bde4eb32f3d41686c2d6e9deb9cbe79837346cd5bbe5a8e88945a5993990dce8",
+      "imprescindible": true
+    },
+    {
+      "ruta": "centros_educativos.geojson",
+      "bytes": 351940,
+      "sha256": "7bdc3edabc3c8e4b3d81cb16cd6923fe184e8c35726887c7ebf9dcf85fd0056c",
+      "imprescindible": false
+    },
+    {
+      "ruta": "centros_mayores.geojson",
+      "bytes": 24234,
+      "sha256": "3142c390252162bcb3419021ff17eee6c314eab125efe324c74839fcccddc1ab",
+      "imprescindible": false
+    }
+  ]
+}

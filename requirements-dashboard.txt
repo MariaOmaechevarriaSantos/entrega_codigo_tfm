@@ -1,0 +1,14 @@
+# Dependencias de RUNTIME del dashboard (app/streamlit_app.py) — Fase P5, bloque 8.
+#
+# El dashboard NO abre ficheros de data/ ni importa routing/ml (invariante de
+# P5): solo habla con la API por HTTP. Por eso aquí NO están geopandas,
+# shapely, networkx, xgboost, duckdb ni flask.
+#
+# Versiones ancladas a las del .venv.
+
+streamlit==1.62.0
+folium==0.20.0
+streamlit-folium==0.27.4
+pydeck==0.9.3
+requests==2.34.2
+python-dotenv==1.2.3

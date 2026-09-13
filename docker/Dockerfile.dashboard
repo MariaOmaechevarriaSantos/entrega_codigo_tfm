@@ -1,0 +1,47 @@
+# Dashboard Streamlit — Fase P5, bloque 8 (empaquetado).
+# Contexto de build: raíz del repo.  docker build -f docker/Dockerfile.dashboard .
+#
+# El dashboard solo habla con la API por HTTP (invariante de P5): no lleva
+# geopandas, xgboost, duckdb ni datos.
+
+# ─────────────── builder ───────────────
+FROM python:3.14-slim AS builder
+
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_ROOT_USER_ACTION=ignore
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements-dashboard.txt /tmp/requirements-dashboard.txt
+RUN pip install -r /tmp/requirements-dashboard.txt
+
+# ─────────────── runtime ───────────────
+FROM python:3.14-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PATH="/opt/venv/bin:$PATH" \
+    API_URL=http://api:8080
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /app
+COPY app/ app/
+COPY .streamlit/ .streamlit/
+
+RUN useradd --system --uid 10002 --home-dir /app tfm \
+ && chown -R tfm:tfm /app
+USER tfm
+
+EXPOSE 8501
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["streamlit", "run", "app/streamlit_app.py", \
+     "--server.port=8501", "--server.address=0.0.0.0", \
+     "--server.headless=true", "--browser.gatherUsageStats=false"]
