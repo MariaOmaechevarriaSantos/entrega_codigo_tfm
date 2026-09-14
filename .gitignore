@@ -5,14 +5,24 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.venv
 .venv/
 venv/
 .pytest_cache/
+.ruff_cache/
 .ipynb_checkpoints/
 
 # Datos y artefactos generados por el pipeline (se regeneran con `make`)
+# Sin barra final: si data/ o .venv son enlaces simbólicos a otra carpeta
+# (montaje local de los datos), el patrón con barra NO los ignora y acaban
+# commiteados como enlaces rotos para quien clone.
+data
 data/
 cache/
+
+# dist/ SÍ se versiona. artifacts.tar.gz (5,3 MB) viaja dentro del repositorio
+# para que `git clone` + `docker compose up` funcione sin ficheros externos,
+# sin red y sin credenciales. Ver scripts/empaquetar_artefactos.py.
 
 # Entorno
 .env

@@ -22,12 +22,19 @@ completa (99,9 M filas que runtime no lee).
 EL MANIFIESTO (artifacts.manifest.json, SE COMMITEA)
 --------------------------------------------------
 Lista, por fichero: nombre, bytes y sha256. `data-init` verifica cada
-fichero del volumen contra ESTA lista. El repo tiene el manifiesto; el
-Release tiene el tarball -> son orígenes independientes: verificar un
-fichero contra el manifiesto NO es comprobarlo contra sí mismo.
+fichero del volumen contra ESTA lista. Manifiesto y tarball son ficheros
+distintos: lo que se comprueba es cada fichero YA EXTRAÍDO en el volumen
+contra la lista, no el tarball contra sí mismo. Eso es lo que detecta una
+extracción incompleta, un volumen corrupto o un paquete que no corresponde
+a esta versión del código.
+
+Ambos viajan en el repositorio (dist/artifacts.tar.gz son 5,3 MB): el
+tribunal clona y levanta, sin red ni credenciales. `ARTIFACTS_URL` sigue
+disponible para servir el tarball desde un GitHub Release, pero ya no es
+necesaria para arrancar.
 
 El manifiesto guarda además el sha256 del propio tarball, como control de
-integridad de la descarga (no como única verificación).
+integridad de la copia o la descarga (no como única verificación).
 
 USO
 ---

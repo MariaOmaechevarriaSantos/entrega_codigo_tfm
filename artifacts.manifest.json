@@ -2,8 +2,8 @@
   "schema": "tfm-bomberos/artefactos-runtime/1",
   "tarball": {
     "nombre": "artifacts.tar.gz",
-    "bytes": 5291174,
-    "sha256": "02b605bac4e1937828cb8e105a3e19d89bebe4c50c01dd2e7020e505ec570f2e"
+    "bytes": 5273344,
+    "sha256": "03f22421c71cc35df73ce813063870d198016e9d35bb6d1715d5e4820bb9334b"
   },
   "ficheros": [
     {
@@ -26,26 +26,26 @@
     },
     {
       "ruta": "modelo_trafico_xgboost.pkl",
-      "bytes": 3240657,
-      "sha256": "c9856a0b7ccbc5108ac187ba86931abb71ce89d8068d3e28ee7b1deba8974a59",
+      "bytes": 3178094,
+      "sha256": "e0f21ff41ff94f729d959fb165680d9dbf8099e2a87ddc3b49a6de9f5a37b9b6",
       "imprescindible": true
     },
     {
       "ruta": "modelo_trafico_xgboost_metadata.json",
-      "bytes": 6781,
-      "sha256": "35cd74bb34e5bf5fd71b72fa0663471a84c5061370325c4c162368466564c6c0",
+      "bytes": 6782,
+      "sha256": "a6eceb0ab4677ab3b3d7cd630f52186af4861481aa822880373c06faf079edc1",
       "imprescindible": true
     },
     {
       "ruta": "tfm_madrid.duckdb",
       "bytes": 798720,
-      "sha256": "006b4a6f9b78a8b8acb0f704d2bcf963a8f160d09d10bd33bc10b681a37a31b1",
+      "sha256": "504a7a98097a55af0aaf61e0b8bdf109f44b4569fde0baf44ab81ffecf8e3114",
       "imprescindible": true
     },
     {
       "ruta": "isocronas_bomberos.geojson",
-      "bytes": 91498,
-      "sha256": "bde4eb32f3d41686c2d6e9deb9cbe79837346cd5bbe5a8e88945a5993990dce8",
+      "bytes": 91074,
+      "sha256": "b7cbab858bd1d2839a8467abe04f3ceaa18424d2da55211ebc7fc3450c029dcd",
       "imprescindible": true
     },
     {

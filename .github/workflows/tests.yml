@@ -1,0 +1,54 @@
+# Suite rápida en cada push y en cada PR — Fase P5, bloque 8B (punto 4).
+#
+# "Rápida" = `pytest tests/` sin --runslow: no carga el grafo real de
+# data/processed (~171 k nodos), que ni siquiera está en el repo. ~18 s de
+# tests; el grueso del tiempo del job es instalar requirements.txt.
+#
+# Disparadores acotados para no gastar minutos (repo PRIVADO, plan Free =
+# 2.000 min/mes): se ignoran los cambios que solo tocan documentación, y
+# `concurrency` cancela un run anterior de la misma rama si llega otro push.
+
+name: tests
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'capturas_*/**'
+      - 'notebooks/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'capturas_*/**'
+      - 'notebooks/**'
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Suite rápida
+        run: python -m pytest tests/ -q --durations=10

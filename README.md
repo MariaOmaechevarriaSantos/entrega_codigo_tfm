@@ -33,15 +33,16 @@ La parte P3 esta documentada con detalle en [README_P3_MODELO_TRAFICO.md](README
 
 ## Arranque rapido con docker-compose (P5)
 
-Para levantar el sistema completo (API + dashboard) en una maquina limpia, sin instalar Python. Necesita Docker con Compose v2 y el paquete de datos `dist/artifacts.tar.gz` (no viaja en el `git clone`; se copia a `./dist/`, se genera con `make data`, o se apunta a un GitHub Release con `ARTIFACTS_URL` en `.env`).
+Para levantar el sistema completo (API + dashboard) en una maquina limpia, sin instalar Python. Solo necesita Docker con Compose v2: el paquete de datos `dist/artifacts.tar.gz` (5,3 MB) viaja en el `git clone`, asi que no hay que conseguir ningun fichero aparte. Se regenera con `make data`; `ARTIFACTS_URL` en `.env` permite ademas servirlo desde un GitHub Release, pero no hace falta.
 
 ```bash
 git clone <URL-del-repositorio> tfm_codigo && cd tfm_codigo
-mkdir -p dist && cp /ruta/a/artifacts.tar.gz dist/     # o: make data
 docker compose -f docker-compose.yml build              # ~5 min la primera vez (descarga de PyPI)
 docker compose -f docker-compose.yml up -d --wait --wait-timeout 300
 curl -s http://localhost:8080/health                    # -> 200, "status": "ok"; dashboard en http://localhost:8501
 ```
+
+Si los puertos 8080 u 8501 estan ocupados: `API_PORT=8081 DASHBOARD_PORT=8502 docker compose -f docker-compose.yml up -d --wait`.
 
 Procedimiento completo (dos caminos, comprobaciones, que hacer si falla, plan B sin red): [docs/p5/README_P5_API_Streamlit.md](docs/p5/README_P5_API_Streamlit.md), seccion 13.
 

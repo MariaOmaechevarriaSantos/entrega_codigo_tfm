@@ -1,0 +1,31 @@
+# Contexto de build mínimo — Fase P5, bloque 8.
+# Sin esto, el .venv (1,8 GB) y data/ (~921 MB) irían al daemon en cada build.
+
+.venv/
+venv/
+.git/
+.github/
+
+# Datos: NUNCA en las imágenes (llegan por volumen vía data-init).
+data/
+dist/
+
+# Notebooks, tests, capturas, docs largas
+notebooks/
+tests/
+capturas_*/
+htmlcov/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Basura de Python / editores / SO
+**/__pycache__/
+**/*.py[cod]
+*.egg-info/
+.vscode/
+.idea/
+.DS_Store
+*.log
+
+# Entorno local
+.env

@@ -15,8 +15,9 @@ sigan siendo el mismo.
 
 ## Decisión
 
-Los datos viajan en un `artifacts.tar.gz` (local en `./dist` o de un
-GitHub Release) y un servicio efímero `data-init` puebla con ellos un
+Los datos viajan en un `artifacts.tar.gz` versionado en `./dist` (5,3 MB;
+`ARTIFACTS_URL` permite además servirlo desde un GitHub Release, pero no
+hace falta) y un servicio efímero `data-init` puebla con ellos un
 **volumen con nombre** (`processed_data`), verificándolos fichero a fichero
 contra `artifacts.manifest.json` (existe + bytes + sha256). La API monta
 ese volumen en `/app/data/processed`. Las imágenes **no** contienen datos
@@ -29,8 +30,11 @@ ese volumen en `/app/data/processed`. Las imágenes **no** contienen datos
   `data-init` ve el volumen ya verificado y sale sin tocar nada.
 - El estado "datos listos" es observable (`docker compose ps`, logs de
   `data-init`), no está incrustado en el arranque de la API.
-- El manifiesto se versiona en el repo; el tarball vive en el Release →
-  orígenes independientes, la verificación no es circular.
+- Manifiesto y tarball se versionan juntos: `git clone` + `docker compose
+  up` basta, sin red ni credenciales. Lo que `data-init` comprueba es cada
+  fichero ya extraído en el volumen contra el manifiesto, no el tarball
+  contra sí mismo → detecta extracciones incompletas, volúmenes corruptos y
+  paquetes que no corresponden a esta versión del código.
 - Contrapartida: hay un artefacto más que mantener (el tarball + su
   manifiesto) y un primer arranque que extrae ~5 MB.
 

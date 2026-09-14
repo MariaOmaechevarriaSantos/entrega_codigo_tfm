@@ -1,0 +1,42 @@
+# Tema de la aplicación — sigue DESIGN_SYSTEM.md (raíz del proyecto).
+#
+# Identidad institucional del Ayuntamiento de Madrid: azul corporativo
+# #0055A0 (Pantone 286 C), tipografía DM Sans (oficial) con Verdana de
+# reserva, un solo modo claro, radios pequeños, bordes de 1 px. Los colores
+# funcionales (verde/ámbar/rojo) solo comunican estado.
+#
+# Lo que NO cabe en el tema nativo (cabecera institucional, migas de pan,
+# pie, tamaño de las cifras, foco de doble anillo, tablas estilo AEMET) se
+# aplica con CSS puntual en app/_ui_common.py::css_operativo().
+
+[server]
+enableStaticServing = true          # sirve app/static/ para los assets de marca
+
+[theme]
+base = "light"
+primaryColor = "#0055A0"            # Azul Madrid — Pantone 286 C
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F8"
+textColor = "#1A1A1A"
+linkColor = "#0055A0"
+linkUnderline = true
+borderColor = "#C7CED6"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "4px"
+baseFontSize = 16
+
+font = "DM Sans:https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&display=swap"
+headingFont = "DM Sans:https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,600;9..40,700&display=swap"
+codeFont = "DM Mono:https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap"
+headingFontSizes = ["34px", "24px", "19px", "16px", "14px", "13px"]
+headingFontWeights = [700, 700, 600, 600, 600, 600]
+
+greenColor = "#1E7E34"
+orangeColor = "#A15C00"
+redColor = "#B3261E"
+
+[theme.sidebar]
+backgroundColor = "#F4F6F8"
+secondaryBackgroundColor = "#FFFFFF"
+borderColor = "#C7CED6"

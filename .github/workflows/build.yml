@@ -1,0 +1,54 @@
+# Build de las dos imágenes — Fase P5, bloque 8B (punto 4).
+#
+# SOLO en pull_request (no en cada push): construir las imágenes es lo caro
+# (~6-10 min en frío), y en un TFM con muchos pushes a la rama de trabajo no
+# tiene sentido pagarlo cada vez. En un PR sí interesa saber que el
+# empaquetado sigue construyendo antes de integrar.
+#
+# push: false -> NO se publica en ningún registro (descartado a propósito,
+# ver docs/adr/0005). El job solo verifica que `docker build` termina. La
+# caché de capas se guarda en el almacén de GitHub Actions (type=gha), no
+# cuenta como minutos.
+
+name: build-images
+
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'capturas_*/**'
+      - 'notebooks/**'
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        imagen: [api, dashboard]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build docker/Dockerfile.${{ matrix.imagen }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.${{ matrix.imagen }}
+          push: false
+          load: false
+          cache-from: type=gha,scope=${{ matrix.imagen }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.imagen }}
+          # GIT_SHA / BUILD_DATE / MANIFEST_SHA256 se dejan en su default
+          # ("desconocido"): este job solo comprueba que la imagen construye,
+          # no produce un artefacto que se vaya a servir.
